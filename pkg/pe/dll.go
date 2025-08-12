@@ -127,7 +127,7 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
 	defer func() {
 		// create a byte slice that points to the mapped DLL memory
 		mappedDLL := (*[1 << 30]byte)(unsafe.Pointer(dllBase))[:regionSize:regionSize]
-		enc.EncryptBuffer(&mappedDLL, encKey, 0)
+		enc.EncryptBuffer(&mappedDLL, encKey)
 		enc.SecureWipeBuffer(&encKey) // wipe the encryption key from memory
 	}()
 

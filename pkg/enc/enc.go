@@ -34,7 +34,7 @@ func EncryptDecryptBuffer(buffer *[]byte, key []byte, sleepSeconds int) {
 	wincall.Call("SystemFunction032", "advapi32.dll", &dataUString, &keyUString)
 }
 // used in contexts like encrypting the mapped dll before melt and after its own execution
-func EncryptBuffer(buffer *[]byte, key []byte, sleepSeconds int) {
+func EncryptBuffer(buffer *[]byte, key []byte) {
 	var dataUString UString
 	var keyUString UString
 	dataUString.Buffer = &(*buffer)[0]
@@ -48,7 +48,7 @@ func EncryptBuffer(buffer *[]byte, key []byte, sleepSeconds int) {
 
 // optional, this is purely for naming conventions, you could very well call encryptbuffer() again and achieve the same affect
 // rc4 is symmetric
-func DecryptBuffer(buffer *[]byte, key []byte, sleepSeconds int) {
+func DecryptBuffer(buffer *[]byte, key []byte) {
 	var dataUString UString
 	var keyUString UString
 	dataUString.Buffer = &(*buffer)[0]
