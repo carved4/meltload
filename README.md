@@ -60,7 +60,7 @@ memory protection changes from PAGE_READWRITE to PAGE_EXECUTE_READ using NtProte
 
 the encryption system generates a random 32-byte rc4 key during loading. a deferred function encrypts the mapped dll memory in place after execution completes. the encryption key gets securely wiped from memory after use.
 
-memory tracking maintains a global registry of loaded dlls protected by read-write mutex. each mapping stores base address and size information. the Melt function uses VirtualFree with MEM_RELEASE flag and automatically removes entries from the tracking registry. this is offset iffy, but DLL 0: Base=0x19065C10000, Size=32768 bytes is all that shows up to memory scanners, can also optionally be encrypted when unused if you want to adapt this further
+memory tracking maintains a global registry of loaded dlls protected by read-write mutex. each mapping stores base address and size information. the Melt function uses VirtualFree with MEM_RELEASE flag and automatically removes entries from the tracking registry. this is opsec iffy, but DLL 0: Base=0x19065C10000, Size=32768 bytes is all that shows up to memory scanners, can also optionally be encrypted when unused if you want to adapt this further
 
 ## evasion features
 
