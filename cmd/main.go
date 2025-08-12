@@ -1,0 +1,47 @@
+package main
+
+import (
+	"github.com/carved4/meltloader/pkg/pe"
+	"fmt"
+)
+
+func main() {
+	// if you are not down with downloading stuff from github and executing it, do this on a VM or you can verify carter jones' messagebox dll using the link provided :3
+	mapping, err := pe.LoadDLLFromURL("https://github.com/carterjones/hello-world-dll/releases/download/v1.0.0/hello-world-x64.dll", "MessageBoxThread", 2)
+	if err != nil {
+		fmt.Println("failed to download", err)
+	}
+	// the downloaded buffer is optionally encrypted for an amount of time in seconds passed as an int to LoadDLLFromURL() as demonstrated in the call above and then decrypted before execution
+	// you can also call the func without the sleep parameter as displayed below
+	// the mapped DLL in memory after load and execution is encrypted in place with RC4 and will not be able to be interacted with
+	// if you wish to change this in your own projects, just remove the defer enc.EncryptBuffer of our mapped image
+	// the downloaded buyf
+	mapping2, err := pe.LoadDLLFromURL("https://github.com/carterjones/hello-world-dll/releases/download/v1.0.0/hello-world-x64.dll", "MessageBoxThread")
+	if err != nil {
+		fmt.Println("failed to download", err)
+	}
+	// first call before melting to check how many DLLs are mapped into our process' image
+	baseAddrs, sizes, count := pe.GetMap()
+	fmt.Printf("currently have %d DLLs mapped:\n", count)
+	for i := 0; i < count; i++ {
+		fmt.Printf("DLL %d: Base=0x%X, Size=%d bytes\n", i, baseAddrs[i], sizes[i])
+}
+	// call melt to virtualfree (feel free to change to an nt* call, but i like the reliability)
+	err = pe.Melt(mapping)
+	if err != nil {
+		fmt.Println("failed to melt dll after load")
+	}
+	// call on other mapping (this takes in an interface returned into mapping and optionally unpacked for display in pe.GetMap())
+	err = pe.Melt(mapping2)
+	if err != nil {
+		fmt.Println("failed to melt dll after loasd")
+	}
+	// demonstrate they are no longer in our image and then close
+	fmt.Println("successfuly melted dll!")
+	baseAddrs, sizes, count = pe.GetMap()
+	fmt.Printf("currently have %d DLLs mapped:\n", count)
+	for i := 0; i < count; i++ {
+		fmt.Printf("DLL %d: Base=0x%X, Size=%d bytes\n", i, baseAddrs[i], sizes[i])
+}
+
+}
