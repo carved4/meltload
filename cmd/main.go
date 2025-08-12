@@ -42,6 +42,6 @@ func main() {
 	fmt.Printf("currently have %d DLLs mapped:\n", count)
 	for i := 0; i < count; i++ {
 		fmt.Printf("DLL %d: Base=0x%X, Size=%d bytes\n", i, baseAddrs[i], sizes[i])
-}
+	}
 
 }
