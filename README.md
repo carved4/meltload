@@ -2,6 +2,9 @@
 
 a reflective dll loader for windows written in go that performs pe loading entirely in memory with automatic memory management and encryption features.
 
+## demo
+![melt](https://github.com/user-attachments/assets/819639da-32ca-4393-8945-0e4c0b8145d6)
+
 ## overview
 
 meltload implements reflective dll loading using windows nt api calls to allocate, write, and execute pe files without touching disk. the loader handles pe parsing, relocation processing, import resolution, and memory protection changes while providing tracking and cleanup capabilities. this should allow you to chain an arbitrary amount of DLLs that perform various operations in a modular and secure manner :3
