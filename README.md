@@ -1,13 +1,14 @@
 # meltloader
 
-a reflective dll loader for windows written in go that performs pe loading entirely in memory with automatic memory management and encryption features.
+a reflective dll/pe loader for windows written in go that performs pe loading entirely in memory with automatic memory management and encryption features.
 
 ## demo
+>now supports PEs
 ![melt](https://github.com/user-attachments/assets/819639da-32ca-4393-8945-0e4c0b8145d6)
 
 ## overview
 
-meltload implements reflective dll loading using windows nt api calls to allocate, write, and execute pe files without touching disk. the loader handles pe parsing, relocation processing, import resolution, and memory protection changes while providing tracking and cleanup capabilities. this should allow you to chain an arbitrary amount of DLLs that perform various operations in a modular and secure manner :3
+meltload implements reflective dll/pe loading using windows nt api calls to allocate, write, and execute pe files without touching disk. the loader handles pe parsing, relocation processing, import resolution, and memory protection changes while providing tracking and cleanup capabilities. this should allow you to chain an arbitrary amount of DLLs that perform various operations in a modular and secure manner :3
 
 the loader uses windows' provided SystemFunction032 rc4 encryption for evasion purposes. downloaded dlls are always encrypted in memory with an optional sleep period before decryption and execution, and after execution the mapped dll image gets encrypted in place using a randomly generated key. this makes the loaded dll unreadable to memory analysis tools while maintaining proper cleanup functionality.
 
@@ -17,7 +18,7 @@ LoadDLLFromURL requires https connections as winhttp in all my implementations f
 
 ## go dll compatibility
 
-this loader does not work with go-compiled dlls due to abi mismatch issues. the wincall library used for syscalls was designed to operate within an os thread context with an uninitialized go runtime. go dlls expect a fully initialized go runtime environment which conflicts with this approach. use standard c/c++ compiled dlls instead (better anyways, more reusable)
+this loader does not work with go-compiled dlls due to abi mismatch issues. the wincall library used for syscalls was designed to operate within an os thread context with an uninitialized go runtime. go dlls expect a fully initialized go runtime environment which conflicts with this approach. use standard c/c++ compiled dlls instead (better anyways, more reusable) go pe's work fine but you'll get some go panic stderr when you run the threadloader on a go binary
 
 ## api usage
 
@@ -36,6 +37,9 @@ baseAddrs, sizes, count := pe.GetMap()
 
 // cleanup/unmap dll from memory
 err = pe.Melt(mapping)
+
+// cleanup/ummap exe from memory 
+err = pe.MeltPE(mapping)
 ```
 
 ## function identifier interface
