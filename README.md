@@ -18,7 +18,7 @@ LoadDLLFromURL requires https connections as winhttp in all my implementations f
 
 ## go dll compatibility
 
-this loader does not work with go-compiled dlls due to abi mismatch issues. the wincall library used for syscalls was designed to operate within an os thread context with an uninitialized go runtime. go dlls expect a fully initialized go runtime environment which conflicts with this approach. use standard c/c++ compiled dlls instead (better anyways, more reusable) go pe's work fine but you'll get some go panic stderr when you run the threadloader on a go binary
+also works with go compiled dlls, see go-dll-src/ for reference 
 
 ## api usage
 

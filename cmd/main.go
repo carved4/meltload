@@ -6,10 +6,10 @@ import (
 )
 
 func main() {
-	// if you are not down with downloading stuff from github and executing it, do this on a VM or you can verify carter jones' messagebox dll using the link provided :3
-	mapping, err := pe.LoadDLLFromURL("https://github.com/carterjones/hello-world-dll/releases/download/v1.0.0/hello-world-x64.dll", "MessageBoxThread", 2)
+	// Load local test DLL that exports HostInfo (built in go-dll-src/)
+	mapping, err := pe.LoadDLLFromFile("hostinfo.dll", "HostInfo")
 	if err != nil {
-		fmt.Println("failed to download", err)
+		fmt.Println("failed to load", err)
 	}
 	// the downloaded buffer is optionally encrypted for an amount of time in seconds passed as an int to LoadDLLFromURL() as demonstrated in the call above and then decrypted before execution
 	// you can also call the func without the sleep parameter as displayed below

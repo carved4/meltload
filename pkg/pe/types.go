@@ -15,10 +15,6 @@ const (
 	PAGE_READWRITE = 0x04
 	PAGE_EXECUTE_READ = 0x20
 	PAGE_READONLY = 0x02
-	RTL_ENCRYPT_OPTION_SAME_PROCESS   = 0x01
-	RTL_ENCRYPT_OPTION_CROSS_PROCESS  = 0x02
-	RTL_ENCRYPT_OPTION_SAME_LOGON     = 0x04
-	RTL_ENCRYPT_MEMORY_SIZE           = 0x08  // 8 bytes minimum
 	THREAD_SUSPEND_RESUME = 0x0002
 	THREAD_ALL_ACCESS     = 0x1FFFFF
 )
@@ -104,14 +100,12 @@ type BASE_RELOCATION_ENTRY struct {
 	OffsetType uint16
 }
 
-
 type IMAGE_IMPORT_DESCRIPTOR struct {
-	Characteristics     uint32
+	OriginalFirstThunk  uint32 // union with Characteristics
 	TimeDateStamp       uint32
 	ForwarderChain      uint32
 	Name                uint32
 	FirstThunk          uint32
-	OriginalFirstThunk  uint32
 }
 
 type IMAGE_EXPORT_DIRECTORY struct {
@@ -365,4 +359,15 @@ func (bre BASE_RELOCATION_ENTRY) Type() uint16 {
 const (
 	IMAGE_DIRECTORY_ENTRY_EXPORT    = 0x0
 	IMAGE_DIRECTORY_ENTRY_IMPORT    = 0x1
+	IMAGE_DIRECTORY_ENTRY_TLS       = 0x9
 )
+
+// TLS directory for x64
+type IMAGE_TLS_DIRECTORY64 struct {
+	StartAddressOfRawData uint64
+	EndAddressOfRawData   uint64
+	AddressOfIndex        uint64
+	AddressOfCallBacks    uint64
+	SizeOfZeroFill        uint32
+	Characteristics       uint32
+}

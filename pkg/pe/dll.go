@@ -8,6 +8,8 @@ import (
 	"io/ioutil"
 	"unsafe"
 	"sync"
+	"os"
+	"path/filepath"
 	"github.com/carved4/meltloader/pkg/net"
 	"github.com/carved4/meltloader/pkg/enc"
 	api "github.com/carved4/go-wincall"
@@ -56,28 +58,41 @@ func uintptrToBytes(ptr uintptr) []byte {
 }
 
 func bytePtrToString(ptr *byte) string {
-	if ptr == nil {
-		return ""
-	}
-	
-	var result []byte
-	for i := uintptr(0); ; i++ {
-		b := *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(ptr)) + i))
-		if b == 0 {
-			break
-		}
-		result = append(result, b)
-	}
-	
-	return string(result)
+    if ptr == nil {
+        return ""
+    }
+    
+    var result []byte
+    for i := uintptr(0); ; i++ {
+        b := *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(ptr)) + i))
+        if b == 0 {
+            break
+        }
+        result = append(result, b)
+    }
+    
+    return string(result)
 }
 
 func LoadDLLFromFile(filePath string, functionIdentifier interface{}) (*DLLMapping, error) {
-	dllBytes, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("[ERROR] failed to read DLL file: %v", err)
-	}
-	return LoadDLL(dllBytes, functionIdentifier)
+    // If a raw name or relative path is given, resolve it against current working directory.
+    if !filepath.IsAbs(filePath) {
+        wd, werr := os.Getwd()
+        if werr != nil {
+            return nil, fmt.Errorf("[ERROR] could not get working directory: %v", werr)
+        }
+        candidate := filepath.Join(wd, filePath)
+        if _, statErr := os.Stat(candidate); statErr != nil {
+            return nil, fmt.Errorf("[ERROR] DLL not found in current directory: %s", filePath)
+        }
+        filePath = candidate
+    }
+
+    dllBytes, err := ioutil.ReadFile(filePath)
+    if err != nil {
+        return nil, fmt.Errorf("[ERROR] failed to read DLL file: %v", err)
+    }
+    return LoadDLL(dllBytes, functionIdentifier)
 }
 
 
@@ -146,9 +161,34 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
 		sectionDestination := dllBase + uintptr(section.VirtualAddress)
 		sectionBytes := (*byte)(unsafe.Pointer(dllPtr + uintptr(section.PointerToRawData)))
 
-		status, err = api.NtWriteVirtualMemory(^uintptr(0), sectionDestination, uintptr(unsafe.Pointer(sectionBytes)), uintptr(section.SizeOfRawData), &numberOfBytesWritten)
-		if err != nil || status != 0 {
-			log.Fatalf("[ERROR] NtWriteVirtualMemory Failed: status=0x%X, err=%v", status, err)
+		// Copy initialized data
+		if section.SizeOfRawData > 0 {
+			status, err = api.NtWriteVirtualMemory(^uintptr(0), sectionDestination, uintptr(unsafe.Pointer(sectionBytes)), uintptr(section.SizeOfRawData), &numberOfBytesWritten)
+			if err != nil || status != 0 {
+				log.Fatalf("[ERROR] NtWriteVirtualMemory Failed: status=0x%X, err=%v", status, err)
+			}
+		}
+		// Zero the remaining VirtualSize for .bss (if any)
+		if section.VirtualSize > section.SizeOfRawData {
+			zeroStart := sectionDestination + uintptr(section.SizeOfRawData)
+			zeroSize := uintptr(section.VirtualSize - section.SizeOfRawData)
+			// Create zeroed buffer on the fly in chunks to avoid huge allocs (simple approach here)
+			const chunk = 0x1000
+			var written uintptr
+			for zeroSize > 0 {
+				n := zeroSize
+				if n > chunk {
+					n = chunk
+				}
+				// Reuse a static zero page by allocating once
+				var zeroPage [chunk]byte
+				status, err = api.NtWriteVirtualMemory(^uintptr(0), zeroStart, uintptr(unsafe.Pointer(&zeroPage[0])), n, &written)
+				if err != nil || status != 0 {
+					log.Fatalf("[ERROR] NtWriteVirtualMemory (zero) Failed: status=0x%X, err=%v", status, err)
+				}
+				zeroStart += n
+				zeroSize -= n
+			}
 		}
 		sectionAddr += unsafe.Sizeof(*section)
 	}
@@ -204,113 +244,222 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
 			relocations_processed += int(relocation_block.BlockSize)
 		}
 	}
+    // Resolve imports using INT (OriginalFirstThunk) when present, writing into IAT (FirstThunk)
+    importsDirectory := nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]
+    if importsDirectory.VirtualAddress != 0 {
+    importDescriptorAddr := dllBase + uintptr(importsDirectory.VirtualAddress)
+    for {
+        importDescriptor := *(*IMAGE_IMPORT_DESCRIPTOR)(unsafe.Pointer(importDescriptorAddr))
+        if importDescriptor.Name == 0 {
+            break
+        }
+        libraryName := uintptr(importDescriptor.Name) + dllBase
+        dllName := bytePtrToString((*byte)(unsafe.Pointer(libraryName)))
+        // Use LoadLibraryA: import names are ANSI in the table
+        dllNameBytes := append([]byte(dllName), 0)
+        hLibrary, _ := api.Call("kernel32.dll", "LoadLibraryA", uintptr(unsafe.Pointer(&dllNameBytes[0])))
+        if hLibrary == 0 {
+            log.Fatalf("[ERROR] LoadLibrary Failed for: %s", dllName)
+        }
+        intAddr := dllBase + uintptr(importDescriptor.OriginalFirstThunk)
+        iatAddr := dllBase + uintptr(importDescriptor.FirstThunk)
+        for {
+            var lookup uint64
+            if importDescriptor.OriginalFirstThunk != 0 {
+                lookup = *(*uint64)(unsafe.Pointer(intAddr))
+            } else {
+                lookup = *(*uint64)(unsafe.Pointer(iatAddr))
+            }
+            if lookup == 0 {
+                break
+            }
+            var proc uintptr
+            var perr error
+            if (lookup & 0x8000000000000000) != 0 {
+                // Import by ordinal: pass ordinal value as LPCSTR using MAKEINTRESOURCEA semantics
+                ordinal := lookup & 0xFFFF
+                proc, perr = api.Call("kernel32.dll", "GetProcAddress", hLibrary, uintptr(ordinal))
+            } else {
+                functionNameAddr := dllBase + uintptr(lookup+2)
+                functionName := bytePtrToString((*byte)(unsafe.Pointer(functionNameAddr)))
+                functionNameBytes := append([]byte(functionName), 0)
+                proc, perr = api.Call("kernel32.dll", "GetProcAddress", hLibrary, uintptr(unsafe.Pointer(&functionNameBytes[0])))
+                if (perr != nil || proc == 0) && functionName != "" {
+                    // If GetProcAddress failed, check if this is a forwarded export by name
+                    if fwdAddr, ok := checkForwardedExportByName(unsafe.Pointer(hLibrary), functionName); ok {
+                        fwdStr := cstringAt(fwdAddr)
+                        realProc, rerr := resolveForwardedExport(fwdStr)
+                        if rerr == nil && realProc != 0 {
+                            proc = realProc
+                            perr = nil
+                        }
+                    }
+                }
+            }
+            if perr != nil || proc == 0 {
+                log.Fatalf("[ERROR] Failed to GetProcAddress for %s (lookup=0x%X) err=%v", dllName, lookup, perr)
+            }
+            // If the proc points inside the export directory, it's a forwarder string
+            if isForwardedExport(unsafe.Pointer(hLibrary), proc) {
+                fwdStr := cstringAt(proc)
+                realProc, rerr := resolveForwardedExport(fwdStr)
+                if rerr != nil || realProc == 0 {
+                    log.Fatalf("[ERROR] Failed to resolve forwarded export %s from %s: %v", fwdStr, dllName, rerr)
+                }
+                proc = realProc
+            }
+            procBytes := uintptrToBytes(proc)
+            var numberOfBytesWritten uintptr
+            status, err := api.NtWriteVirtualMemory(^uintptr(0), iatAddr, uintptr(unsafe.Pointer(&procBytes[0])), uintptr(len(procBytes)), &numberOfBytesWritten)
+            if err != nil || status != 0 {
+                log.Fatalf("[ERROR] NtWriteVirtualMemory(IAT) Failed: status=0x%X, err=%v", status, err)
+            }
+            if importDescriptor.OriginalFirstThunk != 0 { intAddr += 0x8 }
+            iatAddr += 0x8
+        }
+        importDescriptorAddr += 0x14
+    }
+    }
 
-	importsDirectory := nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]
-	importDescriptorAddr := dllBase + uintptr(importsDirectory.VirtualAddress)
+    // Set proper protections: headers R, .text RX, .rdata R, .data/.pdata RW, etc.
+    // Protect headers as read-only
+    {
+        base := dllBase
+        size := uintptr(nt_header.OptionalHeader.SizeOfHeaders)
+        var oldProt uintptr
+        status, err = api.NtProtectVirtualMemory(^uintptr(0), &base, &size, PAGE_READONLY, &oldProt)
+        if err != nil || status != 0 {
+            log.Fatalf("[ERROR] NtProtectVirtualMemory (headers) Failed: status=0x%X, err=%v", status, err)
+        }
+    }
+    // Section flag masks
+    const (
+        IMAGE_SCN_MEM_EXECUTE = 0x20000000
+        IMAGE_SCN_MEM_READ    = 0x40000000
+        IMAGE_SCN_MEM_WRITE   = 0x80000000
+    )
+    // Iterate sections and set per-section protection
+    {
+        numberOfSections := int(nt_header.FileHeader.NumberOfSections)
+        sectionAddr := dllPtr + uintptr(e_lfanew) + unsafe.Sizeof(nt_header.Signature) + unsafe.Sizeof(nt_header.OptionalHeader) + unsafe.Sizeof(nt_header.FileHeader)
+        for i := 0; i < numberOfSections; i++ {
+            section := (*IMAGE_SECTION_HEADER)(unsafe.Pointer(sectionAddr))
+            if section.VirtualSize == 0 {
+                sectionAddr += unsafe.Sizeof(*section)
+                continue
+            }
+            secBase := dllBase + uintptr(section.VirtualAddress)
+            secSize := uintptr(section.VirtualSize)
+            // Round up to page size implicitly handled by NtProtectVirtualMemory
+            var prot uint32 = PAGE_READONLY
+            flags := section.Characteristics
+            if (flags & IMAGE_SCN_MEM_WRITE) != 0 {
+                prot = PAGE_READWRITE
+            } else if (flags & IMAGE_SCN_MEM_EXECUTE) != 0 {
+                prot = PAGE_EXECUTE_READ
+            } else if (flags & IMAGE_SCN_MEM_READ) != 0 {
+                prot = PAGE_READONLY
+            }
+            base := secBase
+            size := secSize
+            var oldProt uintptr
+            status, err = api.NtProtectVirtualMemory(^uintptr(0), &base, &size, uintptr(prot), &oldProt)
+            if err != nil || status != 0 {
+                log.Fatalf("[ERROR] NtProtectVirtualMemory (section %d) Failed: status=0x%X, err=%v", i, status, err)
+            }
+            sectionAddr += unsafe.Sizeof(*section)
+        }
+    }
 
-	for {
-		importDescriptor := *(*IMAGE_IMPORT_DESCRIPTOR)(unsafe.Pointer(importDescriptorAddr))
-		if importDescriptor.Name == 0 {
-			break
-		}
-		libraryName := uintptr(importDescriptor.Name) + dllBase
-		dllName := bytePtrToString((*byte)(unsafe.Pointer(libraryName)))
-		hLibrary := api.LoadLibraryW(dllName)
-		if hLibrary == 0 {
-			log.Fatalf("[ERROR] LoadLibrary Failed for: %s", dllName)
-		}
-		addr := dllBase + uintptr(importDescriptor.FirstThunk)
-		for {
-			thunk := *(*uint64)(unsafe.Pointer(addr))
-			if thunk == 0 {
-				break
-			}
-			functionNameAddr := dllBase + uintptr(thunk+2)
+    // Run TLS callbacks (if present) before DllMain
+    {
+        tlsDir := nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS]
+        if tlsDir.VirtualAddress != 0 && tlsDir.Size >= uint32(unsafe.Sizeof(IMAGE_TLS_DIRECTORY64{})) {
+            tls := (*IMAGE_TLS_DIRECTORY64)(unsafe.Pointer(dllBase + uintptr(tlsDir.VirtualAddress)))
+            callbackArray := uintptr(tls.AddressOfCallBacks)
+            for callbackArray != 0 {
+                cb := *(*uintptr)(unsafe.Pointer(callbackArray))
+                if cb == 0 { break }
+                api.CallWorker(cb, dllBase, DLL_PROCESS_ATTACH, 0)
+                callbackArray += unsafe.Sizeof(uintptr(0))
+            }
+        }
+    }
+    // Call module entry (DllMainCRTStartup) with DLL_PROCESS_ATTACH to run CRT/TLS/Go runtime init
+    {
+        entry := dllBase + uintptr(nt_header.OptionalHeader.AddressOfEntryPoint)
+        api.CallWorker(entry, dllBase, DLL_PROCESS_ATTACH, 0)
+    }
 
-			functionName := bytePtrToString((*byte)(unsafe.Pointer(functionNameAddr)))
-			functionNameBytes := append([]byte(functionName), 0) // null-terminated
-			proc, err := api.Call("kernel32.dll", "GetProcAddress", hLibrary, uintptr(unsafe.Pointer(&functionNameBytes[0])))
-			if err != nil || proc == 0 {
-				log.Fatalf("[ERROR] Failed to GetProcAddress for %s: %v", functionName, err)
-			}
-			procBytes := uintptrToBytes(proc)
-			var numberOfBytesWritten uintptr
-			status, err := api.NtWriteVirtualMemory(^uintptr(0), addr, uintptr(unsafe.Pointer(&procBytes[0])), uintptr(len(procBytes)), &numberOfBytesWritten)
-			if err != nil || status != 0 {
-				log.Fatalf("[ERROR] Failed to NtWriteVirtualMemory: status=0x%X, err=%v", status, err)
-			}
-			addr += 0x8
+    exportsDirectory := nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+    if exportsDirectory.VirtualAddress != 0 {
+        exportTable := (*IMAGE_EXPORT_DIRECTORY)(unsafe.Pointer(dllBase + uintptr(exportsDirectory.VirtualAddress)))
+        functionRVAs := (*[1000]uint32)(unsafe.Pointer(dllBase + uintptr(exportTable.AddressOfFunctions)))
+        nameRVAs := (*[1000]uint32)(unsafe.Pointer(dllBase + uintptr(exportTable.AddressOfNames)))
+        nameOrdinals := (*[1000]uint16)(unsafe.Pointer(dllBase + uintptr(exportTable.AddressOfNameOrdinals)))
 
-		}
-		importDescriptorAddr += 0x14
-	}
+        var functionRVA uint32
+        var found bool
 
-	baseAddr := dllBase
-	regionSize = uintptr(nt_header.OptionalHeader.SizeOfImage)
-	var oldProtect uintptr
-	status, err = api.NtProtectVirtualMemory(^uintptr(0), &baseAddr, &regionSize, PAGE_EXECUTE_READ, &oldProtect)
-	if err != nil || status != 0 {
-		log.Fatalf("[ERROR] NtProtectVirtualMemory Failed: status=0x%X, err=%v", status, err)
-	}
+        switch v := functionIdentifier.(type) {
+        case string:
+            for i := uint32(0); i < exportTable.NumberOfNames; i++ {
+                nameAddr := dllBase + uintptr(nameRVAs[i])
+                funcName := bytePtrToString((*byte)(unsafe.Pointer(nameAddr)))
+                if funcName == v {
+                    functionRVA = functionRVAs[nameOrdinals[i]]
+                    found = true
+                    break
+                }
+            }
+        case int:
+            ordinalIndex := uint32(v) - exportTable.Base
+            if ordinalIndex < exportTable.NumberOfFunctions {
+                functionRVA = functionRVAs[ordinalIndex]
+                found = true
+            }
+        default:
+            if str, ok := functionIdentifier.(string); ok {
+                if num, err := strconv.Atoi(str); err == nil {
+                    ordinalIndex := uint32(num) - exportTable.Base
+                    if ordinalIndex < exportTable.NumberOfFunctions {
+                        functionRVA = functionRVAs[ordinalIndex]
+                        found = true
+                    }
+                } else {
+                    for i := uint32(0); i < exportTable.NumberOfNames; i++ {
+                        nameAddr := dllBase + uintptr(nameRVAs[i])
+                        funcName := bytePtrToString((*byte)(unsafe.Pointer(nameAddr)))
+                        if funcName == str {
+                            functionRVA = functionRVAs[nameOrdinals[i]]
+                            found = true
+                            break
+                        }
+                    }
+                }
+            }
+        }
 
-	exportsDirectory := nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
-	if exportsDirectory.VirtualAddress != 0 {
-		exportTable := (*IMAGE_EXPORT_DIRECTORY)(unsafe.Pointer(dllBase + uintptr(exportsDirectory.VirtualAddress)))
-		
-		functionRVAs := (*[1000]uint32)(unsafe.Pointer(dllBase + uintptr(exportTable.AddressOfFunctions)))
-		nameRVAs := (*[1000]uint32)(unsafe.Pointer(dllBase + uintptr(exportTable.AddressOfNames)))
-		nameOrdinals := (*[1000]uint16)(unsafe.Pointer(dllBase + uintptr(exportTable.AddressOfNameOrdinals)))
-		
-		
-		var functionRVA uint32
-		var found bool
-
-		switch v := functionIdentifier.(type) {
-		case string:
-			for i := uint32(0); i < exportTable.NumberOfNames; i++ {
-				nameAddr := dllBase + uintptr(nameRVAs[i])
-				funcName := bytePtrToString((*byte)(unsafe.Pointer(nameAddr)))
-				if funcName == v {
-					functionRVA = functionRVAs[nameOrdinals[i]]
-					found = true
-					break
-				}
-			}
-		case int:
-			ordinalIndex := uint32(v) - exportTable.Base
-			if ordinalIndex < exportTable.NumberOfFunctions {
-				functionRVA = functionRVAs[ordinalIndex]
-				found = true
-			}
-		default:
-			if str, ok := functionIdentifier.(string); ok {
-				if num, err := strconv.Atoi(str); err == nil {
-					ordinalIndex := uint32(num) - exportTable.Base
-					if ordinalIndex < exportTable.NumberOfFunctions {
-						functionRVA = functionRVAs[ordinalIndex]
-						found = true
-					}
-				} else {
-					for i := uint32(0); i < exportTable.NumberOfNames; i++ {
-						nameAddr := dllBase + uintptr(nameRVAs[i])
-						funcName := bytePtrToString((*byte)(unsafe.Pointer(nameAddr)))
-						if funcName == str {
-							functionRVA = functionRVAs[nameOrdinals[i]]
-							found = true
-							break
-						}
-					}
-				}
-			}
-		}
-		
-		if found && functionRVA != 0 {
-			api.CallWorker(dllBase+uintptr(functionRVA))
-		} else {
-		}
-	} else {
-		api.CallWorker(dllBase+uintptr(nt_header.OptionalHeader.AddressOfEntryPoint), dllBase, DLL_PROCESS_ATTACH, 0)
-	}
+        if found && functionRVA != 0 {
+            funcVA := dllBase + uintptr(functionRVA)
+            exportStart := dllBase + uintptr(exportsDirectory.VirtualAddress)
+            exportEnd := exportStart + uintptr(exportsDirectory.Size)
+            if funcVA >= exportStart && funcVA < exportEnd {
+                // Forwarded export string inside export directory
+                fwdStr := bytePtrToString((*byte)(unsafe.Pointer(funcVA)))
+                realProc, rerr := resolveForwardedExport(fwdStr)
+                if rerr != nil || realProc == 0 {
+                    log.Fatalf("[ERROR] Failed to resolve forwarded export %s: %v", fwdStr, rerr)
+                }
+                api.CallWorker(realProc)
+            } else {
+                api.CallWorker(funcVA)
+            }
+        } else {
+        }
+    } else {
+        api.CallWorker(dllBase+uintptr(nt_header.OptionalHeader.AddressOfEntryPoint), dllBase, DLL_PROCESS_ATTACH, 0)
+    }
 	mapping := createDLLMapping(dllBase, uintptr(nt_header.OptionalHeader.SizeOfImage))
 	
 	return mapping, nil
