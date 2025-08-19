@@ -45,3 +45,4 @@ TEXT ·GetPEB(SB), $0-8
     NOP
     MOVQ AX, ret+0(FP)
     RET
+    
