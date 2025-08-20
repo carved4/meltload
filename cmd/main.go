@@ -11,7 +11,6 @@ import (
 func main() {
 	debug.SetGCPercent(-1)
 	log.Printf("[main] start")
-	// Load local test DLL that exports HostInfo (built in go-dll-src/)
 	pid, pHandle, err := pe.FindTargetProcess("notepad.exe")
 	if err != nil {
 		log.Printf("[main] failed to find process: %v", err)

@@ -94,18 +94,8 @@ func FindTargetProcess(processName string) (uint32, uintptr, error) {
 	}
 
 	if len(matches) > 1 {
-		fmt.Printf("[!] Multiple processes found matching '%s':\n", processName)
-		for i, proc := range matches {
-			procName := ""
-			for j := 0; j < len(proc.ExeFile); j++ {
-				if proc.ExeFile[j] == 0 {
-					break
-				}
-				procName += string(rune(proc.ExeFile[j]))
-			}
-			fmt.Printf("  [%d] PID: %d, Name: %s\n", i, proc.ProcessID, procName)
-		}
-		return 0, 0, fmt.Errorf("multiple matches found, please be more specific")
+		// Common case: multiple matches; select the first one deterministically
+		fmt.Printf("[!] Multiple processes found matching '%s', selecting the first match (PID=%d)\n", processName, matches[0].ProcessID)
 	}
 
 	targetProc := matches[0]
