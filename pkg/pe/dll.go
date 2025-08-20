@@ -1,18 +1,19 @@
 package pe
 
 import (
-	"encoding/binary"
-	"fmt"
-	"log"
-	"strconv"
-	"io/ioutil"
-	"unsafe"
-	"sync"
-	"os"
-	"path/filepath"
-	"github.com/carved4/meltloader/pkg/net"
-	"github.com/carved4/meltloader/pkg/enc"
-	api "github.com/carved4/go-wincall"
+    "encoding/binary"
+    "fmt"
+    "log"
+    "strconv"
+    "io/ioutil"
+    "unsafe"
+    "sync"
+    "os"
+    "path/filepath"
+    "strings"
+    "github.com/carved4/meltloader/pkg/net"
+    "github.com/carved4/meltloader/pkg/enc"
+    api "github.com/carved4/go-wincall"
 )
 
 type DLLMapping struct {
@@ -97,7 +98,7 @@ func LoadDLLFromFile(filePath string, functionIdentifier interface{}) (*DLLMappi
 
 
 func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, error) {
-	dllPtr := uintptr(unsafe.Pointer(&dllBytes[0]))
+    dllPtr := uintptr(unsafe.Pointer(&dllBytes[0]))
 
 	if len(dllBytes) < 64 {
 		return nil, fmt.Errorf("[ERROR] DLL file too small (less than 64 bytes)")
@@ -371,6 +372,15 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
         }
     }
 
+    // Determine if caller requested export-only invocation via special prefix.
+    exportOnly := false
+    if s, ok := functionIdentifier.(string); ok {
+        if strings.HasPrefix(s, "export_only:") {
+            exportOnly = true
+            functionIdentifier = strings.TrimPrefix(s, "export_only:")
+        }
+    }
+
     // Run TLS callbacks (if present) before DllMain
     {
         tlsDir := nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS]
@@ -385,8 +395,8 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
             }
         }
     }
-    // Call module entry (DllMainCRTStartup) with DLL_PROCESS_ATTACH to run CRT/TLS/Go runtime init
-    {
+    // Call module entry (DllMainCRTStartup) with DLL_PROCESS_ATTACH unless export-only was requested
+    if !exportOnly {
         entry := dllBase + uintptr(nt_header.OptionalHeader.AddressOfEntryPoint)
         api.CallWorker(entry, dllBase, DLL_PROCESS_ATTACH, 0)
     }
@@ -457,12 +467,10 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
             }
         } else {
         }
-    } else {
-        api.CallWorker(dllBase+uintptr(nt_header.OptionalHeader.AddressOfEntryPoint), dllBase, DLL_PROCESS_ATTACH, 0)
     }
-	mapping := createDLLMapping(dllBase, uintptr(nt_header.OptionalHeader.SizeOfImage))
-	
-	return mapping, nil
+    mapping := createDLLMapping(dllBase, uintptr(nt_header.OptionalHeader.SizeOfImage))
+    
+    return mapping, nil
 }
 
 

