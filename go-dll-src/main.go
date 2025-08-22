@@ -6,26 +6,14 @@ package main
 import "C"
 
 import (
-	"fmt"
-	"os"
-	"runtime"
-	"time"
+	"github.com/carved4/go-wincall"
 )
 
-//export HostInfo
-func HostInfo() {
-	host, _ := os.Hostname()
-	user := os.Getenv("USERNAME")
-	if user == "" {
-		user = os.Getenv("USER")
-	}
-	fmt.Println("go dll example")
-	fmt.Printf("Time: %s\n", time.Now().Format(time.RFC3339))
-	fmt.Printf("Hostname: %s\n", host)
-	fmt.Printf("User: %s\n", user)
-	fmt.Printf("OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	fmt.Printf("CPU Count: %d\n", runtime.NumCPU())
-	fmt.Printf("Go Version: %s\n", runtime.Version())
+//export Test
+func Test() {
+	title, _ := wincall.UTF16ptr("dll remote inject test")
+	message, _ := wincall.UTF16ptr("this is a test")
+	wincall.Call("user32.dll", "MessageBoxW", 0, title, message, 0x00000002)
 }
 
 func main() {}

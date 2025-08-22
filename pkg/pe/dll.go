@@ -390,7 +390,7 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
             for callbackArray != 0 {
                 cb := *(*uintptr)(unsafe.Pointer(callbackArray))
                 if cb == 0 { break }
-                api.CallWorker(cb, dllBase, DLL_PROCESS_ATTACH, 0)
+                api.CallG0(cb, dllBase, DLL_PROCESS_ATTACH, 0)
                 callbackArray += unsafe.Sizeof(uintptr(0))
             }
         }
@@ -398,7 +398,7 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
     // Call module entry (DllMainCRTStartup) with DLL_PROCESS_ATTACH unless export-only was requested
     if !exportOnly {
         entry := dllBase + uintptr(nt_header.OptionalHeader.AddressOfEntryPoint)
-        api.CallWorker(entry, dllBase, DLL_PROCESS_ATTACH, 0)
+        api.CallG0(entry, dllBase, DLL_PROCESS_ATTACH, 0)
     }
 
     exportsDirectory := nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
@@ -461,9 +461,9 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) (*DLLMapping, erro
                 if rerr != nil || realProc == 0 {
                     log.Fatalf("[ERROR] Failed to resolve forwarded export %s: %v", fwdStr, rerr)
                 }
-                api.CallWorker(realProc)
+                api.CallG0(realProc)
             } else {
-                api.CallWorker(funcVA)
+                api.CallG0(funcVA)
             }
         } else {
         }

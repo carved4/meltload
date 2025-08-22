@@ -1,10 +1,6 @@
 github.com/Binject/debug v0.0.0-20230508195519-26db73212a7a h1:4c0nc0krv8eh7gD809n+swLaCuFyHpxdrxwx0ZmHvBw=
 github.com/Binject/debug v0.0.0-20230508195519-26db73212a7a/go.mod h1:QzgxDLY/qdKlvnbnb65eqTedhvQPbaSP2NqIbcuKvsQ=
-github.com/carved4/go-maldev v0.0.0-20250812045442-82645f6aa69c h1:xPMPNhdbKuqSgFBMGcCHPKYNwfBvhXkaJGiYltR/3q8=
-github.com/carved4/go-maldev v0.0.0-20250812045442-82645f6aa69c/go.mod h1:IAMwgQcoToxQZYPJyG45xCYK4xp6vSwbSpEjMA1IwJc=
-github.com/carved4/go-native-syscall v1.3.7 h1:aKG/ZTvF1Vc5oL9cMIolEw9UDZ+n49QNMz7JyG64eRY=
-github.com/carved4/go-native-syscall v1.3.7/go.mod h1:N6u621Q52vY0R1xcuPOPTnW9YKnlHwaZXhMfj6xayyw=
 github.com/carved4/go-native-syscall v1.3.8 h1:3vPxodiw0mnI7u/8Mtymw6BExLe4Ibd7fXLNqQq8smw=
 github.com/carved4/go-native-syscall v1.3.8/go.mod h1:N6u621Q52vY0R1xcuPOPTnW9YKnlHwaZXhMfj6xayyw=
-github.com/carved4/go-wincall v1.1.4 h1:59hRviJS1leTM+ATdhPLJ8qfQkznf7YeWt6ryxnzvJk=
-github.com/carved4/go-wincall v1.1.4/go.mod h1:G1YIp2fkB2lSXE+2YtaucTRe6UIVQc0k57l9AzmI5kc=
+github.com/carved4/go-wincall v1.1.5 h1:8uM882TQZJmwBy/STaBc4aDb75QqUrmw4Z5JrS8Fw7Y=
+github.com/carved4/go-wincall v1.1.5/go.mod h1:7Q56wL2YuWHriaMQ5KUBGfg0FI8ryicxE28d/E2VqYA=

@@ -69,34 +69,34 @@ func DownloadToMemory(url string) ([]byte, error) {
 	getUTF16, _ := wincall.UTF16ptr("GET")
 	
 	// open session
-	hSession, _ := wincall.CallWorker(winHttpOpenAddr, userAgent, 0, 0, 0, 0)
+	hSession, _ := wincall.CallG0(winHttpOpenAddr, userAgent, 0, 0, 0, 0)
 	if hSession == 0 {
 		return nil, fmt.Errorf("WinHttpOpen failed")
 	}
-	defer wincall.CallWorker(winHttpCloseHandleAddr, hSession)
+	defer wincall.CallG0(winHttpCloseHandleAddr, hSession)
 	
 	// connect to server
-	hConnect, _ := wincall.CallWorker(winHttpConnectAddr, hSession, hostUTF16, uintptr(443), 0)
+	hConnect, _ := wincall.CallG0(winHttpConnectAddr, hSession, hostUTF16, uintptr(443), 0)
 	if hConnect == 0 {
 		return nil, fmt.Errorf("WinHttpConnect failed")
 	}
-	defer wincall.CallWorker(winHttpCloseHandleAddr, hConnect)
+	defer wincall.CallG0(winHttpCloseHandleAddr, hConnect)
 	
 	// open request
-	hRequest, _ := wincall.CallWorker(winHttpOpenRequestAddr, hConnect, getUTF16, pathUTF16, 0, 0, 0, 0x00800000) // WINHTTP_FLAG_SECURE
+	hRequest, _ := wincall.CallG0(winHttpOpenRequestAddr, hConnect, getUTF16, pathUTF16, 0, 0, 0, 0x00800000) // WINHTTP_FLAG_SECURE
 	if hRequest == 0 {
 		return nil, fmt.Errorf("WinHttpOpenRequest failed")
 	}
-	defer wincall.CallWorker(winHttpCloseHandleAddr, hRequest)
+	defer wincall.CallG0(winHttpCloseHandleAddr, hRequest)
 	
 	// send request
-	result, _ := wincall.CallWorker(winHttpSendRequestAddr, hRequest, 0, 0, 0, 0, 0, 0)
+	result, _ := wincall.CallG0(winHttpSendRequestAddr, hRequest, 0, 0, 0, 0, 0, 0)
 	if result == 0 {
 		return nil, fmt.Errorf("WinHttpSendRequest failed")
 	}
 	
 	// receive response
-	result, _ = wincall.CallWorker(winHttpReceiveResponseAddr, hRequest, 0)
+	result, _ = wincall.CallG0(winHttpReceiveResponseAddr, hRequest, 0)
 	if result == 0 {
 		return nil, fmt.Errorf("WinHttpReceiveResponse failed")
 	}
@@ -110,7 +110,7 @@ func DownloadToMemory(url string) ([]byte, error) {
 		bytesReadPtr := uintptr(unsafe.Pointer(&bytesRead))
 		chunkPtr := uintptr(unsafe.Pointer(&chunk[0]))
 		
-		result, _ := wincall.CallWorker(winHttpReadDataAddr, hRequest, chunkPtr, uintptr(len(chunk)), bytesReadPtr)
+		result, _ := wincall.CallG0(winHttpReadDataAddr, hRequest, chunkPtr, uintptr(len(chunk)), bytesReadPtr)
 		if result == 0 {
 			return nil, fmt.Errorf("WinHttpReadData failed")
 		}

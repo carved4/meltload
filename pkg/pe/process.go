@@ -53,11 +53,11 @@ func FindTargetProcess(processName string) (uint32, uintptr, error) {
 	openProcessHash := wincall.GetHash("OpenProcess")
 	openProcessAddr := wincall.GetFunctionAddress(moduleBase, openProcessHash)
 
-	snapshot, _ := wincall.CallWorker(createToolhelp32SnapshotAddr, 0x00000002, 0)
+	snapshot, _ := wincall.CallG0(createToolhelp32SnapshotAddr, 0x00000002, 0)
 	if snapshot == 0 {
 		return 0, 0, fmt.Errorf("CreateToolhelp32Snapshot failed")
 	}
-	defer wincall.CallWorker(closeHandleAddr, snapshot)
+	defer wincall.CallG0(closeHandleAddr, snapshot)
 
 	var pe ProcessEntry32
 	pe.Size = uint32(unsafe.Sizeof(pe))
@@ -65,7 +65,7 @@ func FindTargetProcess(processName string) (uint32, uintptr, error) {
 	processName = strings.ToLower(processName)
 	var matches []ProcessEntry32
 
-	result, _ := wincall.CallWorker(process32FirstAddr, snapshot, uintptr(unsafe.Pointer(&pe)))
+	result, _ := wincall.CallG0(process32FirstAddr, snapshot, uintptr(unsafe.Pointer(&pe)))
 	if result == 0 {
 		return 0, 0, fmt.Errorf("Process32First failed")
 	}
@@ -83,7 +83,7 @@ func FindTargetProcess(processName string) (uint32, uintptr, error) {
 			matches = append(matches, pe)
 		}
 
-		result, _ = wincall.CallWorker(process32NextAddr, snapshot, uintptr(unsafe.Pointer(&pe)))
+		result, _ = wincall.CallG0(process32NextAddr, snapshot, uintptr(unsafe.Pointer(&pe)))
 		if result == 0 {
 			break
 		}
@@ -99,7 +99,7 @@ func FindTargetProcess(processName string) (uint32, uintptr, error) {
 	}
 
 	targetProc := matches[0]
-	handle, _ := wincall.CallWorker(openProcessAddr, 0x1FFFFF, 0, uintptr(targetProc.ProcessID)) // PROCESS_ALL_ACCESS
+	handle, _ := wincall.CallG0(openProcessAddr, 0x1FFFFF, 0, uintptr(targetProc.ProcessID)) // PROCESS_ALL_ACCESS
 	if handle == 0 {
 		return 0, 0, fmt.Errorf("failed to open process %d", targetProc.ProcessID)
 	}
